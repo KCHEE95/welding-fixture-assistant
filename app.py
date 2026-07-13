@@ -39,72 +39,73 @@ if uploaded_file is not None:
                 if mesh.vertices.shape[0] == 0:
                     raise ValueError("网格不包含任何顶点")
                 
-                # --- 单位修正逻辑 ---
-                vertices = mesh.vertices
-                # 计算顶点范围的最大值
+                vertices = mesh.vertices.copy()
+                # 单位修正
                 max_extent = np.max(np.ptp(vertices, axis=0))
-                
-                # 如果最大范围小于 10mm，极有可能是单位被读成了米，需要放大1000倍
                 if max_extent < 10.0:
                     st.info(f"🔍 检测到模型尺寸过小 ({max_extent:.2f} mm)，疑似单位读取错误。已自动缩放 1000 倍（将米转换为毫米）。")
-                    mesh.vertices = vertices * 1000.0
-                    vertices = mesh.vertices  # 更新引用
+                    vertices *= 1000.0
+                    mesh.vertices = vertices  # 更新网格顶点
                 
-                # 重新计算包围盒
                 bbox = mesh.bounding_box.extents
                 face_count = len(mesh.faces)
                 
-            else:  # STL 格式
+            else:  # STL
                 mesh = trimesh.load(uploaded_file, file_type='stl')
                 vertices = mesh.vertices
-                faces = mesh.faces
                 bbox = mesh.bounding_box.extents
-                face_count = len(faces)
+                face_count = len(mesh.faces)
                 
         except Exception as e:
             st.error(f"❌ 无法加载或解析文件，错误信息：{e}")
             st.info("💡 提示：请确认上传的是有效的 STEP (.stp) 或 STL (.stl) 文件。")
             st.stop()
 
+    # --- 为了显示，将模型平移到原点 ---
+    center = np.mean(vertices, axis=0)
+    vertices_centered = vertices - center
+    faces = mesh.faces
+
     # --- 显示模型预览 ---
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.subheader("📐 工件预览")
-        center = np.mean(vertices, axis=0)
-        diag = np.linalg.norm(bbox)
-        if diag < 1e-6:
-            diag = 1.0
-        
-        camera_distance = diag * 2.5
-        
+        # 计算包围盒半边长，用于设定轴范围
+        half = np.max(np.abs(vertices_centered), axis=0)
+        # 确保所有轴范围相等以保持比例，取最大半边长
+        max_half = max(half)
+        axis_range = [-max_half * 1.2, max_half * 1.2]  # 稍微留一点边距
+
         fig = go.Figure(data=[
             go.Mesh3d(
-                x=vertices[:,0],
-                y=vertices[:,1],
-                z=vertices[:,2],
-                i=mesh.faces[:,0],
-                j=mesh.faces[:,1],
-                k=mesh.faces[:,2],
+                x=vertices_centered[:,0],
+                y=vertices_centered[:,1],
+                z=vertices_centered[:,2],
+                i=faces[:,0],
+                j=faces[:,1],
+                k=faces[:,2],
                 color='#FF9900',
-                opacity=0.8,
-                flatshading=True
+                opacity=0.85,
+                flatshading=True,
+                lighting=dict(ambient=0.5, diffuse=0.8, roughness=0.5)
             )
         ])
-        
+
         fig.update_layout(
             scene=dict(
-                aspectmode='data',
+                xaxis=dict(range=axis_range, title='X', showgrid=True, zeroline=False),
+                yaxis=dict(range=axis_range, title='Y', showgrid=True, zeroline=False),
+                zaxis=dict(range=axis_range, title='Z', showgrid=True, zeroline=False),
+                aspectmode='manual',
+                aspectratio=dict(x=1, y=1, z=1),  # 强制等比例
                 camera=dict(
-                    eye=dict(x=camera_distance, y=camera_distance, z=camera_distance),
-                    center=dict(x=center[0], y=center[1], z=center[2])
-                ),
-                xaxis_title='X',
-                yaxis_title='Y',
-                zaxis_title='Z'
+                    eye=dict(x=2.0, y=2.0, z=2.0),  # 从斜上方观看
+                    center=dict(x=0, y=0, z=0)
+                )
             ),
             margin=dict(l=0, r=0, t=0, b=0),
-            height=500
+            height=550
         )
         st.plotly_chart(fig, use_container_width=True)
 
