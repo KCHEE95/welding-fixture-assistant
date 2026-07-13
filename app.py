@@ -39,12 +39,22 @@ if uploaded_file is not None:
                 if mesh.vertices.shape[0] == 0:
                     raise ValueError("网格不包含任何顶点")
                 
+                # --- 单位修正逻辑 ---
                 vertices = mesh.vertices
-                faces = mesh.faces
-                bbox = mesh.bounding_box.extents
-                face_count = len(faces)
+                # 计算顶点范围的最大值
+                max_extent = np.max(np.ptp(vertices, axis=0))
                 
-            else:  # STL
+                # 如果最大范围小于 10mm，极有可能是单位被读成了米，需要放大1000倍
+                if max_extent < 10.0:
+                    st.info(f"🔍 检测到模型尺寸过小 ({max_extent:.2f} mm)，疑似单位读取错误。已自动缩放 1000 倍（将米转换为毫米）。")
+                    mesh.vertices = vertices * 1000.0
+                    vertices = mesh.vertices  # 更新引用
+                
+                # 重新计算包围盒
+                bbox = mesh.bounding_box.extents
+                face_count = len(mesh.faces)
+                
+            else:  # STL 格式
                 mesh = trimesh.load(uploaded_file, file_type='stl')
                 vertices = mesh.vertices
                 faces = mesh.faces
@@ -61,13 +71,11 @@ if uploaded_file is not None:
 
     with col1:
         st.subheader("📐 工件预览")
-        # 计算包围盒中心和尺寸
         center = np.mean(vertices, axis=0)
-        diag = np.linalg.norm(bbox)  # 包围盒对角线长度
+        diag = np.linalg.norm(bbox)
         if diag < 1e-6:
-            diag = 1.0  # 防止零除
+            diag = 1.0
         
-        # 设置相机距离为对角线长度的2.5倍，并指向中心
         camera_distance = diag * 2.5
         
         fig = go.Figure(data=[
@@ -75,9 +83,9 @@ if uploaded_file is not None:
                 x=vertices[:,0],
                 y=vertices[:,1],
                 z=vertices[:,2],
-                i=faces[:,0],
-                j=faces[:,1],
-                k=faces[:,2],
+                i=mesh.faces[:,0],
+                j=mesh.faces[:,1],
+                k=mesh.faces[:,2],
                 color='#FF9900',
                 opacity=0.8,
                 flatshading=True
@@ -105,7 +113,6 @@ if uploaded_file is not None:
         st.write(f"**尺寸 (长×宽×高)**: {bbox[0]:.1f} × {bbox[1]:.1f} × {bbox[2]:.1f} mm")
         st.write(f"**三角面片数**: {face_count:,}")
         st.write(f"**文件格式**: {file_extension.upper()}")
-        # 显示顶点范围以便调试
         st.write(f"**顶点范围 (X)**: [{vertices[:,0].min():.1f}, {vertices[:,0].max():.1f}]")
         st.write(f"**顶点范围 (Y)**: [{vertices[:,1].min():.1f}, {vertices[:,1].max():.1f}]")
         st.write(f"**顶点范围 (Z)**: [{vertices[:,2].min():.1f}, {vertices[:,2].max():.1f}]")
