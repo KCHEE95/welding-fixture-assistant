@@ -2,37 +2,75 @@ import streamlit as st
 from streamlit_stl import stl_from_text
 import trimesh
 import numpy as np
+import tempfile
+import os
 
 # 页面配置
 st.set_page_config(page_title="焊接工装设计副驾驶", layout="wide")
 st.title("🔧 焊接工装设计副驾驶 (钣金简易版)")
-st.markdown("上传你的钣金STL模型，获取老师傅的工装设计思路")
+st.markdown("上传你的钣金 STEP 模型，获取老师傅的工装设计思路")
 
-# 上传组件
-uploaded_file = st.file_uploader("上传 3D 模型 (STL 格式)", type=["stl"])
+# 上传组件 - 现在支持 STL 和 STEP
+uploaded_file = st.file_uploader(
+    "上传 3D 模型 (支持 STL / STEP 格式)", 
+    type=["stl", "stp", "step"]
+)
 
 if uploaded_file is not None:
-    # 读取文件内容（用于显示）
+    # 读取文件内容
     file_bytes = uploaded_file.getvalue()
+    file_extension = uploaded_file.name.split('.')[-1].lower()
+    
+    # 显示处理状态
+    with st.spinner("正在加载模型，请稍候..."):
+        try:
+            # --- 如果是 STEP 格式，先转换为 STL ---
+            if file_extension in ['stp', 'step']:
+                # 将上传的文件保存为临时 STEP 文件
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.stp') as tmp_input:
+                    tmp_input.write(file_bytes)
+                    tmp_input_path = tmp_input.name
+                
+                # 使用 trimesh 的 cascade 模块加载 STEP 并获取网格
+                # 注意：这需要提前安装好 cascadio 库
+                mesh = trimesh.load(tmp_input_path, file_type='stp')
+                
+                # 将网格保存为 STL 格式到临时文件，用于显示
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.stl') as tmp_output:
+                    mesh.export(tmp_output.name)
+                    with open(tmp_output.name, 'rb') as f:
+                        stl_bytes = f.read()
+                    tmp_output_path = tmp_output.name
+                
+                # 清理临时文件
+                os.unlink(tmp_input_path)
+                os.unlink(tmp_output_path)
+                
+                # 获取网格信息
+                bbox = mesh.bounding_box.extents
+                faces = len(mesh.faces)
+                
+            else:  # 直接处理 STL 文件
+                mesh = trimesh.load(uploaded_file, file_type='stl')
+                bbox = mesh.bounding_box.extents
+                faces = len(mesh.faces)
+                stl_bytes = file_bytes  # 直接使用原始数据
+                
+            is_valid = True
+            
+        except Exception as e:
+            st.error(f"❌ 无法加载或解析文件，错误信息：{e}")
+            st.info("💡 提示：请确认上传的是有效的 STEP (.stp) 或 STL (.stl) 文件。")
+            st.stop()
 
-    # 尝试加载模型获取尺寸
-    try:
-        mesh = trimesh.load(uploaded_file, file_type='stl')
-        bbox = mesh.bounding_box.extents  # 长宽高 (mm)
-        faces = len(mesh.faces)
-        is_valid = True
-    except:
-        st.error("❌ 无法解析 STL 文件，请检查文件是否损坏。")
-        st.stop()
-
-    # 布局：左侧显示模型，右侧显示信息
+    # --- 显示模型预览和信息 ---
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.subheader("📐 工件预览")
         # 使用 streamlit-stl 显示 3D 模型
         stl_from_text(
-            text=file_bytes,
+            text=stl_bytes,
             color='#FF9900',
             material='material',
             auto_rotate=True,
@@ -43,8 +81,9 @@ if uploaded_file is not None:
         st.subheader("📊 模型信息")
         st.write(f"**尺寸 (长×宽×高)**: {bbox[0]:.1f} × {bbox[1]:.1f} × {bbox[2]:.1f} mm")
         st.write(f"**三角面片数**: {faces:,}")
+        st.write(f"**文件格式**: {file_extension.upper()}")
 
-    # 用户选择产品类型（让AI更精准）
+    # 用户选择产品类型
     product_type = st.selectbox(
         "请选择您要焊接的产品类型（帮助提供针对性建议）",
         ["L型角钢带三角支撑", "平板拼接", "其他 / 自定义"]
@@ -52,7 +91,6 @@ if uploaded_file is not None:
 
     # 分析按钮
     if st.button("🧠 生成工装设计思路", type="primary"):
-        # 根据类型和尺寸生成建议
         st.subheader("📋 老师傅的设计建议")
         st.divider()
 
@@ -61,6 +99,7 @@ if uploaded_file is not None:
         base_y = bbox[1] + 120
         clamp_count = 3 if bbox[0] > 300 else 2
 
+        # --- 以下原有的分析逻辑保持不变 ---
         if product_type == "L型角钢带三角支撑":
             st.markdown(f"""
             **基于您选择的“L型角钢 + 三角板满焊”结构，量身定制建议如下：**
