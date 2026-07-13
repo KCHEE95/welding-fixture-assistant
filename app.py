@@ -10,32 +10,42 @@ st.set_page_config(page_title="焊接工装设计副驾驶", layout="wide")
 st.title("🔧 焊接工装设计副驾驶 (钣金简易版)")
 st.markdown("上传你的钣金 STEP 模型，获取老师傅的工装设计思路")
 
-# 上传组件 - 现在支持 STL 和 STEP
+# 上传组件
 uploaded_file = st.file_uploader(
     "上传 3D 模型 (支持 STL / STEP 格式)", 
     type=["stl", "stp", "step"]
 )
 
 if uploaded_file is not None:
-    # 读取文件内容
     file_bytes = uploaded_file.getvalue()
     file_extension = uploaded_file.name.split('.')[-1].lower()
     
-    # 显示处理状态
     with st.spinner("正在加载模型，请稍候..."):
         try:
-            # --- 如果是 STEP 格式，先转换为 STL ---
+            # --- 处理 STEP 格式 ---
             if file_extension in ['stp', 'step']:
-                # 将上传的文件保存为临时 STEP 文件
+                # 保存为临时 STEP 文件
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.stp') as tmp_input:
                     tmp_input.write(file_bytes)
                     tmp_input_path = tmp_input.name
                 
-                # 使用 trimesh 的 cascade 模块加载 STEP 并获取网格
-                # 注意：这需要提前安装好 cascadio 库
-                mesh = trimesh.load(tmp_input_path, file_type='stp')
+                # 加载 STEP 文件（可能返回 Scene 或 Trimesh）
+                loaded = trimesh.load(tmp_input_path, file_type='stp')
                 
-                # 将网格保存为 STL 格式到临时文件，用于显示
+                # --- 关键修复：如果返回的是 Scene，提取并合并所有网格 ---
+                if isinstance(loaded, trimesh.Scene):
+                    meshes = []
+                    for geom in loaded.geometry.values():
+                        if isinstance(geom, trimesh.Trimesh):
+                            meshes.append(geom)
+                    if meshes:
+                        mesh = trimesh.util.concatenate(meshes)
+                    else:
+                        raise ValueError("未找到有效的三角网格数据")
+                else:
+                    mesh = loaded  # 已经是 Trimesh
+                
+                # 导出为 STL 临时文件，供 streamlit-stl 显示
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.stl') as tmp_output:
                     mesh.export(tmp_output.name)
                     with open(tmp_output.name, 'rb') as f:
@@ -46,18 +56,16 @@ if uploaded_file is not None:
                 os.unlink(tmp_input_path)
                 os.unlink(tmp_output_path)
                 
-                # 获取网格信息
+                # 获取模型信息
                 bbox = mesh.bounding_box.extents
                 faces = len(mesh.faces)
-                
-            else:  # 直接处理 STL 文件
+
+            else:  # STL 格式
                 mesh = trimesh.load(uploaded_file, file_type='stl')
                 bbox = mesh.bounding_box.extents
                 faces = len(mesh.faces)
-                stl_bytes = file_bytes  # 直接使用原始数据
+                stl_bytes = file_bytes
                 
-            is_valid = True
-            
         except Exception as e:
             st.error(f"❌ 无法加载或解析文件，错误信息：{e}")
             st.info("💡 提示：请确认上传的是有效的 STEP (.stp) 或 STL (.stl) 文件。")
@@ -68,7 +76,6 @@ if uploaded_file is not None:
 
     with col1:
         st.subheader("📐 工件预览")
-        # 使用 streamlit-stl 显示 3D 模型
         stl_from_text(
             text=stl_bytes,
             color='#FF9900',
@@ -83,23 +90,20 @@ if uploaded_file is not None:
         st.write(f"**三角面片数**: {faces:,}")
         st.write(f"**文件格式**: {file_extension.upper()}")
 
-    # 用户选择产品类型
+    # --- 用户选择产品类型（原分析逻辑保持不变）---
     product_type = st.selectbox(
         "请选择您要焊接的产品类型（帮助提供针对性建议）",
         ["L型角钢带三角支撑", "平板拼接", "其他 / 自定义"]
     )
 
-    # 分析按钮
     if st.button("🧠 生成工装设计思路", type="primary"):
         st.subheader("📋 老师傅的设计建议")
         st.divider()
 
-        # 计算通用参数
         base_x = bbox[0] + 120
         base_y = bbox[1] + 120
         clamp_count = 3 if bbox[0] > 300 else 2
 
-        # --- 以下原有的分析逻辑保持不变 ---
         if product_type == "L型角钢带三角支撑":
             st.markdown(f"""
             **基于您选择的“L型角钢 + 三角板满焊”结构，量身定制建议如下：**
@@ -148,7 +152,7 @@ if uploaded_file is not None:
             - 若拼接板较薄，可增加支撑点防止下塌。
             """)
 
-        else:  # 其他/自定义
+        else:
             st.markdown(f"""
             **通用工装设计原则（适用于大多数钣金焊接件）：**
 
