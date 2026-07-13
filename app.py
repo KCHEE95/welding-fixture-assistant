@@ -40,11 +40,28 @@ if uploaded_file is not None:
                     raise ValueError("网格不包含任何顶点")
                 
                 vertices = mesh.vertices.copy()
+                
+                # --- 单位修正 ---
                 max_extent = np.max(np.ptp(vertices, axis=0))
                 if max_extent < 10.0:
-                    st.info(f"🔍 检测到模型尺寸过小 ({max_extent:.2f} mm)，疑似单位读取错误。已自动缩放 1000 倍（将米转换为毫米）。")
+                    st.info(f"🔍 检测到模型尺寸过小 ({max_extent:.2f} mm)，已自动缩放 1000 倍。")
                     vertices *= 1000.0
                     mesh.vertices = vertices
+                
+                # --- 【新增】姿态矫正 ---
+                # 计算包围盒尺寸
+                bbox = mesh.bounding_box.extents
+                # 如果 Z 方向尺寸明显小于 X 或 Y，说明模型是“躺”着的
+                if bbox[2] < bbox[0] * 0.8 and bbox[2] < bbox[1] * 0.8:
+                    st.info("🔄 检测到模型可能处于“躺卧”姿态，正在自动旋转使其“站立”...")
+                    # 绕 X 轴旋转 -90 度，让原来的 Y 方向变成 Z 方向
+                    rotation_matrix = trimesh.transformations.rotation_matrix(
+                        -np.pi/2, [1, 0, 0]
+                    )
+                    mesh.apply_transform(rotation_matrix)
+                    vertices = mesh.vertices.copy()
+                    bbox = mesh.bounding_box.extents
+                    st.write(f"**矫正后尺寸**: {bbox[0]:.1f} × {bbox[1]:.1f} × {bbox[2]:.1f} mm")
                 
                 bbox = mesh.bounding_box.extents
                 face_count = len(mesh.faces)
@@ -116,7 +133,7 @@ if uploaded_file is not None:
         st.write(f"**顶点范围 (Y)**: [{vertices[:,1].min():.1f}, {vertices[:,1].max():.1f}]")
         st.write(f"**顶点范围 (Z)**: [{vertices[:,2].min():.1f}, {vertices[:,2].max():.1f}]")
 
-    # --- 产品类型选择 ---
+    # --- 以下分析逻辑保持不变（省略，完整代码在下方）---
     product_type = st.selectbox(
         "请选择您要焊接的产品类型（帮助提供针对性建议）",
         ["L型角钢带三角支撑", "平板拼接", "其他 / 自定义"]
