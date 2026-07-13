@@ -1,5 +1,5 @@
 streamlit>=1.28.0
-streamlit-stl>=0.0.6
 trimesh>=4.0.0
 numpy>=1.24.0
 cascadio>=0.0.13
+plotly>=5.18.0
