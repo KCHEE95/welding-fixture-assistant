@@ -5,12 +5,10 @@ import tempfile
 import os
 import plotly.graph_objects as go
 
-# 页面配置
 st.set_page_config(page_title="焊接工装设计副驾驶", layout="wide")
 st.title("🔧 焊接工装设计副驾驶 (钣金简易版)")
 st.markdown("上传你的钣金 STEP 模型，获取老师傅的工装设计思路")
 
-# 上传组件
 uploaded_file = st.file_uploader(
     "上传 3D 模型 (支持 STL / STEP 格式)", 
     type=["stl", "stp", "step"]
@@ -22,7 +20,6 @@ if uploaded_file is not None:
     
     with st.spinner("正在加载模型，请稍候..."):
         try:
-            # --- 处理 STEP 格式 ---
             if file_extension in ['stp', 'step']:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.stp') as tmp_input:
                     tmp_input.write(file_bytes)
@@ -31,7 +28,6 @@ if uploaded_file is not None:
                 loaded = trimesh.load(tmp_input_path, file_type='stp')
                 os.unlink(tmp_input_path)
                 
-                # 如果是 Scene，提取并合并所有几何体
                 if isinstance(loaded, trimesh.Scene):
                     meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
                     if not meshes:
@@ -40,36 +36,40 @@ if uploaded_file is not None:
                 else:
                     mesh = loaded
                 
-                # 检查网格是否有效
                 if mesh.vertices.shape[0] == 0:
                     raise ValueError("网格不包含任何顶点")
                 
-                # 获取顶点和三角面（用于 Plotly）
                 vertices = mesh.vertices
                 faces = mesh.faces
                 bbox = mesh.bounding_box.extents
                 face_count = len(faces)
                 
-            else:  # STL 格式
+            else:  # STL
                 mesh = trimesh.load(uploaded_file, file_type='stl')
                 vertices = mesh.vertices
                 faces = mesh.faces
                 bbox = mesh.bounding_box.extents
                 face_count = len(faces)
                 
-            is_valid = True
-            
         except Exception as e:
             st.error(f"❌ 无法加载或解析文件，错误信息：{e}")
             st.info("💡 提示：请确认上传的是有效的 STEP (.stp) 或 STL (.stl) 文件。")
             st.stop()
 
-    # --- 使用 Plotly 显示 3D 模型 ---
+    # --- 显示模型预览 ---
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.subheader("📐 工件预览")
-        # 创建 Mesh3d 对象
+        # 计算包围盒中心和尺寸
+        center = np.mean(vertices, axis=0)
+        diag = np.linalg.norm(bbox)  # 包围盒对角线长度
+        if diag < 1e-6:
+            diag = 1.0  # 防止零除
+        
+        # 设置相机距离为对角线长度的2.5倍，并指向中心
+        camera_distance = diag * 2.5
+        
         fig = go.Figure(data=[
             go.Mesh3d(
                 x=vertices[:,0],
@@ -83,11 +83,14 @@ if uploaded_file is not None:
                 flatshading=True
             )
         ])
-        # 设置相机视角，让模型居中
+        
         fig.update_layout(
             scene=dict(
                 aspectmode='data',
-                camera=dict(eye=dict(x=1.5, y=1.5, z=1.5)),
+                camera=dict(
+                    eye=dict(x=camera_distance, y=camera_distance, z=camera_distance),
+                    center=dict(x=center[0], y=center[1], z=center[2])
+                ),
                 xaxis_title='X',
                 yaxis_title='Y',
                 zaxis_title='Z'
@@ -102,8 +105,12 @@ if uploaded_file is not None:
         st.write(f"**尺寸 (长×宽×高)**: {bbox[0]:.1f} × {bbox[1]:.1f} × {bbox[2]:.1f} mm")
         st.write(f"**三角面片数**: {face_count:,}")
         st.write(f"**文件格式**: {file_extension.upper()}")
+        # 显示顶点范围以便调试
+        st.write(f"**顶点范围 (X)**: [{vertices[:,0].min():.1f}, {vertices[:,0].max():.1f}]")
+        st.write(f"**顶点范围 (Y)**: [{vertices[:,1].min():.1f}, {vertices[:,1].max():.1f}]")
+        st.write(f"**顶点范围 (Z)**: [{vertices[:,2].min():.1f}, {vertices[:,2].max():.1f}]")
 
-    # --- 用户选择产品类型 ---
+    # --- 以下产品类型和分析逻辑保持不变 ---
     product_type = st.selectbox(
         "请选择您要焊接的产品类型（帮助提供针对性建议）",
         ["L型角钢带三角支撑", "平板拼接", "其他 / 自定义"]
