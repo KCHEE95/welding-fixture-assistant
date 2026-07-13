@@ -1,9 +1,9 @@
 import streamlit as st
-from streamlit_stl import stl_from_text
 import trimesh
 import numpy as np
 import tempfile
 import os
+import plotly.graph_objects as go
 
 # 页面配置
 st.set_page_config(page_title="焊接工装设计副驾驶", layout="wide")
@@ -24,73 +24,86 @@ if uploaded_file is not None:
         try:
             # --- 处理 STEP 格式 ---
             if file_extension in ['stp', 'step']:
-                # 保存为临时 STEP 文件
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.stp') as tmp_input:
                     tmp_input.write(file_bytes)
                     tmp_input_path = tmp_input.name
                 
-                # 加载 STEP 文件（可能返回 Scene 或 Trimesh）
                 loaded = trimesh.load(tmp_input_path, file_type='stp')
-                
-                # --- 关键修复：如果返回的是 Scene，提取并合并所有网格 ---
-                if isinstance(loaded, trimesh.Scene):
-                    meshes = []
-                    for geom in loaded.geometry.values():
-                        if isinstance(geom, trimesh.Trimesh):
-                            meshes.append(geom)
-                    if meshes:
-                        mesh = trimesh.util.concatenate(meshes)
-                    else:
-                        raise ValueError("未找到有效的三角网格数据")
-                else:
-                    mesh = loaded  # 已经是 Trimesh
-                
-                # 导出为 STL 临时文件，供 streamlit-stl 显示
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.stl') as tmp_output:
-                    mesh.export(tmp_output.name)
-                    with open(tmp_output.name, 'rb') as f:
-                        stl_bytes = f.read()
-                    tmp_output_path = tmp_output.name
-                
-                # 清理临时文件
                 os.unlink(tmp_input_path)
-                os.unlink(tmp_output_path)
                 
-                # 获取模型信息
+                # 如果是 Scene，提取并合并所有几何体
+                if isinstance(loaded, trimesh.Scene):
+                    meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
+                    if not meshes:
+                        raise ValueError("未找到任何有效的三角网格")
+                    mesh = trimesh.util.concatenate(meshes)
+                else:
+                    mesh = loaded
+                
+                # 检查网格是否有效
+                if mesh.vertices.shape[0] == 0:
+                    raise ValueError("网格不包含任何顶点")
+                
+                # 获取顶点和三角面（用于 Plotly）
+                vertices = mesh.vertices
+                faces = mesh.faces
                 bbox = mesh.bounding_box.extents
-                faces = len(mesh.faces)
-
+                face_count = len(faces)
+                
             else:  # STL 格式
                 mesh = trimesh.load(uploaded_file, file_type='stl')
+                vertices = mesh.vertices
+                faces = mesh.faces
                 bbox = mesh.bounding_box.extents
-                faces = len(mesh.faces)
-                stl_bytes = file_bytes
+                face_count = len(faces)
                 
+            is_valid = True
+            
         except Exception as e:
             st.error(f"❌ 无法加载或解析文件，错误信息：{e}")
             st.info("💡 提示：请确认上传的是有效的 STEP (.stp) 或 STL (.stl) 文件。")
             st.stop()
 
-    # --- 显示模型预览和信息 ---
+    # --- 使用 Plotly 显示 3D 模型 ---
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.subheader("📐 工件预览")
-        stl_from_text(
-            text=stl_bytes,
-            color='#FF9900',
-            material='material',
-            auto_rotate=True,
+        # 创建 Mesh3d 对象
+        fig = go.Figure(data=[
+            go.Mesh3d(
+                x=vertices[:,0],
+                y=vertices[:,1],
+                z=vertices[:,2],
+                i=faces[:,0],
+                j=faces[:,1],
+                k=faces[:,2],
+                color='#FF9900',
+                opacity=0.8,
+                flatshading=True
+            )
+        ])
+        # 设置相机视角，让模型居中
+        fig.update_layout(
+            scene=dict(
+                aspectmode='data',
+                camera=dict(eye=dict(x=1.5, y=1.5, z=1.5)),
+                xaxis_title='X',
+                yaxis_title='Y',
+                zaxis_title='Z'
+            ),
+            margin=dict(l=0, r=0, t=0, b=0),
             height=500
         )
+        st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         st.subheader("📊 模型信息")
         st.write(f"**尺寸 (长×宽×高)**: {bbox[0]:.1f} × {bbox[1]:.1f} × {bbox[2]:.1f} mm")
-        st.write(f"**三角面片数**: {faces:,}")
+        st.write(f"**三角面片数**: {face_count:,}")
         st.write(f"**文件格式**: {file_extension.upper()}")
 
-    # --- 用户选择产品类型（原分析逻辑保持不变）---
+    # --- 用户选择产品类型 ---
     product_type = st.selectbox(
         "请选择您要焊接的产品类型（帮助提供针对性建议）",
         ["L型角钢带三角支撑", "平板拼接", "其他 / 自定义"]
